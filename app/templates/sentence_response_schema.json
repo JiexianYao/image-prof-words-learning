@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "sentences": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "生成的例句列表"
+    }
+  },
+  "required": ["sentences"]
+}

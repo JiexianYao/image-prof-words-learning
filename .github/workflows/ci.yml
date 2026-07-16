@@ -1,0 +1,104 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # 1. Python源码Lint测试
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_py310.txt
+
+      - name: Check code formatting with Black
+        run: black --check .
+
+      - name: Check import ordering with isort
+        run: isort --check-only .
+
+      - name: Run type checking with mypy
+        run: mypy app/
+
+  # 2. Docker操作Lint测试
+  docker-lint:
+    name: Docker Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfile with hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.py310
+          failure-threshold: warning
+
+  # 3. Python源码冒烟测试
+  python-smoke-test:
+    name: Python Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_py310.txt
+
+      - name: Run pytest smoke tests
+        run: |
+          pytest tests/ -v --tb=short
+        env:
+          LLM_API_KEY: "default"
+          TTS_PROVIDER: "none"
+
+  # 4. Docker构建冒烟测试
+  docker-build-smoke-test:
+    name: Docker Build Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -f Dockerfile.py310 -t audiolex-backend:test .
+
+      - name: Run container health check
+        run: |
+          docker run -d --name test-container \
+            -p 8000:8000 \
+            -e LLM_API_KEY="default" \
+            -e TTS_PROVIDER="none" \
+            audiolex-backend:test
+
+          # Wait for container to start
+          sleep 10
+
+          # Check health endpoint
+          curl -f http://localhost:8000/health || exit 1
+
+          # Cleanup
+          docker stop test-container
+          docker rm test-container
