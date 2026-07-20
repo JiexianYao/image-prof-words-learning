@@ -45,7 +45,7 @@ jobs:
       - name: Lint Dockerfile with hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: Dockerfile.py310
+          dockerfile: Dockerfile
           failure-threshold: error
 
   # 3. Python源码冒烟测试
@@ -83,7 +83,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -f Dockerfile.py310 -t audiolex-backend:test .
+          docker build -f Dockerfile -t audiolex-backend:test .
 
       - name: Run container health check
         run: |
