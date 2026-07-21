@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -13,10 +15,18 @@ from .services.tts_provider import build_tts_provider
 # 获取配置
 settings = get_settings()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理：启动和关闭时的资源清理"""
+    logger.info("服务启动中...")
+    yield
+    logger.info("服务关闭中，清理资源...")
+
 app = FastAPI(
     title="AudioLex AI后端服务",
     description="本地AI例句生成服务，为Android APK提供例句生成和TTS能力",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # 添加CORS中间件，允许局域网访问
@@ -159,9 +169,9 @@ def run():
     """启动服务器"""
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
         log_level="info"
     )
 

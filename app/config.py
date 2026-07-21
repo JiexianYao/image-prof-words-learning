@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     allowed_origins: str = "*"  # 逗号分隔；局域网demo默认放开，需要收紧时改成具体网段
+    reload: bool = False  # 生产环境应设为False，开发环境可设为True
 
     # LLM配置
     llm_provider_model: str = "mimo-v2.5-pro"

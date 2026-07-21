@@ -66,23 +66,49 @@ class OpenAITTSProvider(TTSProvider):
         voice = voice or self._settings.tts_provider_voice
         speed = max(0.25, min(4.0, speed))  # 限制速度范围
         
-        async with httpx.AsyncClient(timeout=self._settings.tts_timeout) as client:
-            resp = await client.post(
-                self._settings.tts_provider_base_url,
-                headers={
-                    "Authorization": f"Bearer {self._settings.llm_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self._settings.tts_provider_model,
-                    "input": text,
-                    "voice": voice,
-                    "speed": speed,
-                    "response_format": "mp3",
-                },
-            )
-            resp.raise_for_status()
-            return resp.content
+        # 使用connect_timeout + read_timeout分离，避免建立连接后长时间无响应
+        timeout = httpx.Timeout(
+            connect=10.0,           # 连接超时10秒
+            read=self._settings.tts_timeout,  # 读取超时（从配置读取，默认60秒）
+            write=10.0,
+            pool=10.0,
+        )
+        
+        # 最多重试2次
+        last_error = None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(
+                        self._settings.tts_provider_base_url,
+                        headers={
+                            "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self._settings.tts_provider_model,
+                            "input": text,
+                            "voice": voice,
+                            "speed": speed,
+                            "response_format": "mp3",
+                        },
+                    )
+                    resp.raise_for_status()
+                    return resp.content
+            except httpx.TimeoutException as e:
+                last_error = e
+                logger.warning(f"TTS请求超时 (尝试 {attempt + 1}/3): {str(e)}")
+                if attempt < 2:
+                    import asyncio
+                    await asyncio.sleep(1)  # 等待1秒后重试
+            except httpx.HTTPStatusError as e:
+                logger.error(f"TTS API返回错误: {e.response.status_code} - {e.response.text}")
+                raise
+            except Exception as e:
+                logger.error(f"TTS请求异常: {str(e)}")
+                raise
+        
+        raise last_error or Exception("TTS请求失败")
 
 
 class FallbackTTSProvider(TTSProvider):
