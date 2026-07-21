@@ -76,11 +76,16 @@ class OpenAITTSProvider(TTSProvider):
         
         # 最多重试2次
         last_error = None
+        # 拼接TTS端点路径：如果base_url已包含 /audio/speech 则不重复拼接
+        tts_url = self._settings.tts_provider_base_url.rstrip("/")
+        if not tts_url.endswith("/audio/speech"):
+            tts_url = f"{tts_url}/audio/speech"
+        
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(
-                        self._settings.tts_provider_base_url,
+                        tts_url,
                         headers={
                             "Authorization": f"Bearer {self._settings.llm_api_key}",
                             "Content-Type": "application/json",
