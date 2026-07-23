@@ -128,8 +128,9 @@ async def text_to_speech(request: TTSRequest):
         
         logger.info(f"成功生成TTS音频，大小: {len(audio_data)} 字节")
         # 根据 TTS 提供方设置正确的媒体类型和文件扩展名
-        media_type = "audio/mpeg"
-        file_ext = "mp3"
+        # MiMo(/v1/chat/completions)按我们的请求返回的是wav，不是mp3
+        media_type = "audio/wav"
+        file_ext = "wav"
         
         return Response(
             content=audio_data,

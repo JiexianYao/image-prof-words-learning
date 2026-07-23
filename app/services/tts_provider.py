@@ -12,6 +12,7 @@ TTS提供方抽象。
 """
 from __future__ import annotations
 
+import base64
 import io
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -44,7 +45,22 @@ class TTSProvider(ABC):
 
 
 class OpenAITTSProvider(TTSProvider):
-    """通过OpenAI Audio Speech API生成语音"""
+    """
+    通过小米MiMo生成语音。
+
+    注意：MiMo没有独立的、标准OpenAI风格的 /v1/audio/speech 接口，TTS是复用
+    /v1/chat/completions 实现的（用 audio 字段声明输出音频）：
+    - 待合成文本必须放在 role=assistant 的消息里，不能放 role=user
+      （user消息是可选的风格/指令描述，比如"用温柔的语气"，这里暂不使用）
+    - 响应是一个JSON（普通chat completion结构），音频是
+      choices[0].message.audio.data 里的 base64 字符串，不是原始二进制body
+    - 没有 speed 数值参数，语速只能靠自然语言指令控制，这里的 speed 参数
+      仅为兼容上层调用签名保留，不会真正生效
+    参考: https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5
+
+    class名/name沿用"openai"是因为原先按标准OpenAI TTS接口设计，
+    实际这里只对接MiMo，如果以后要支持真正的OpenAI TTS需要拆成两个provider。
+    """
 
     name = "openai"
 
@@ -53,19 +69,19 @@ class OpenAITTSProvider(TTSProvider):
 
     async def generate(self, text: str, voice: Optional[str] = None, speed: float = 1.0) -> bytes:
         """
-        通过OpenAI API生成语音
-        
+        通过MiMo Chat Completions + audio字段生成语音
+
         Args:
-            text: 要转换为语音的文本
-            voice: 语音类型（覆盖默认设置）
-            speed: 语速（0.25-4.0）
-            
+            text: 要转换为语音的文本（会被放进assistant消息）
+            voice: 音色ID（覆盖默认设置），必须是MiMo支持的音色，如"Mia"/"Chloe"/
+                   "冰糖"/"茉莉"等，不能沿用OpenAI的"alloy"这类名字
+            speed: 语速，MiMo当前不支持数值语速，这个参数会被忽略
+
         Returns:
-            音频数据（MP3格式）
+            音频数据（WAV格式）
         """
         voice = voice or self._settings.tts_provider_voice
-        speed = max(0.25, min(4.0, speed))  # 限制速度范围
-        
+
         # 使用connect_timeout + read_timeout分离，避免建立连接后长时间无响应
         timeout = httpx.Timeout(
             connect=10.0,           # 连接超时10秒
@@ -73,33 +89,45 @@ class OpenAITTSProvider(TTSProvider):
             write=10.0,
             pool=10.0,
         )
-        
+
+        # 拼接端点路径：如果base_url已包含 /chat/completions 则不重复拼接
+        chat_url = self._settings.tts_provider_base_url.rstrip("/")
+        if not chat_url.endswith("/chat/completions"):
+            chat_url = f"{chat_url}/chat/completions"
+
+        payload = {
+            "model": self._settings.tts_provider_model,
+            "messages": [
+                {"role": "assistant", "content": text},
+            ],
+            "audio": {
+                "format": "wav",
+                "voice": voice,
+            },
+        }
+
         # 最多重试2次
-        last_error = None
-        # 拼接TTS端点路径：如果base_url已包含 /audio/speech 则不重复拼接
-        tts_url = self._settings.tts_provider_base_url.rstrip("/")
-        if not tts_url.endswith("/audio/speech"):
-            tts_url = f"{tts_url}/audio/speech"
-        
+        last_error: Optional[Exception] = None
         for attempt in range(3):
+            resp: Optional[httpx.Response] = None
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(
-                        tts_url,
+                        chat_url,
                         headers={
+                            # MiMo文档curl示例用api-key，官方Python SDK示例走标准
+                            # OpenAI客户端（即Authorization: Bearer）。两个都带上，
+                            # 避免因为不确定网关到底认哪个header而调不通。
                             "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "api-key": self._settings.llm_api_key,
                             "Content-Type": "application/json",
                         },
-                        json={
-                            "model": self._settings.tts_provider_model,
-                            "input": text,
-                            "voice": voice,
-                            "speed": speed,
-                            "response_format": "mp3",
-                        },
+                        json=payload,
                     )
                     resp.raise_for_status()
-                    return resp.content
+                    data = resp.json()
+                    audio_b64 = data["choices"][0]["message"]["audio"]["data"]
+                    return base64.b64decode(audio_b64)
             except httpx.TimeoutException as e:
                 last_error = e
                 logger.warning(f"TTS请求超时 (尝试 {attempt + 1}/3): {str(e)}")
@@ -109,10 +137,14 @@ class OpenAITTSProvider(TTSProvider):
             except httpx.HTTPStatusError as e:
                 logger.error(f"TTS API返回错误: {e.response.status_code} - {e.response.text}")
                 raise
+            except (KeyError, IndexError, TypeError, ValueError) as e:
+                body_preview = resp.text[:500] if resp is not None else "(无响应)"
+                logger.error(f"TTS响应解析失败: {str(e)}, 原始响应: {body_preview}")
+                raise
             except Exception as e:
                 logger.error(f"TTS请求异常: {str(e)}")
                 raise
-        
+
         raise last_error or Exception("TTS请求失败")
 
 
