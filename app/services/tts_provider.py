@@ -129,9 +129,16 @@ class FallbackTTSProvider(TTSProvider):
 
 def build_tts_provider(settings: Settings) -> TTSProvider:
     """根据配置选择TTS提供方"""
-    if settings.tts_provider == "openai":
-        if settings.llm_api_key:
-            return OpenAITTSProvider(settings)
-        logger.warning("TTS_PROVIDER=openai 但 LLM_API_KEY 未配置")
+    logger.info(f"TTS配置: provider={settings.tts_provider}, model={settings.tts_provider_model}, voice={settings.tts_provider_voice}")
+    logger.info(f"TTS base_url: {settings.tts_provider_base_url}")
     
+    if settings.tts_provider == "openai":
+        # 检查API密钥是否配置且不是默认值
+        if settings.llm_api_key and settings.llm_api_key != "default":
+            logger.info("使用OpenAI TTS提供方")
+            return OpenAITTSProvider(settings)
+        else:
+            logger.warning("TTS_PROVIDER=openai 但 LLM_API_KEY 未配置或为默认值，无法使用TTS")
+    
+    logger.warning("TTS未配置或配置错误，使用兜底TTS（将返回错误提示）")
     return FallbackTTSProvider()

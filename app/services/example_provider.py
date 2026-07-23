@@ -191,7 +191,12 @@ class OpenAIProvider(SentenceAIProvider):
 
 def build_provider(settings: Settings) -> SentenceAIProvider:
     """根据配置选择provider；缺key或未配置时明确告警并退回模板，而不是静默失败"""
-    if settings.llm_api_key and settings.llm_provider_model:
+    logger.info(f"LLM配置: model={settings.llm_provider_model}, base_url={settings.llm_base_url}")
+    
+    # 检查API密钥是否配置且不是默认值
+    if settings.llm_api_key and settings.llm_api_key != "default" and settings.llm_provider_model:
+        logger.info("使用OpenAI LLM提供方")
         return OpenAIProvider(settings)
-    logger.warning("LLM_API_KEY/LLM_PROVIDER_MODEL 未配置完整，退回模板兜底")
-    return TemplateProvider()
+    else:
+        logger.warning("LLM_API_KEY/LLM_PROVIDER_MODEL 未配置完整或为默认值，退回模板兜底")
+        return TemplateProvider()
