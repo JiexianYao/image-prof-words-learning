@@ -152,18 +152,20 @@ async def list_tts_voices():
     """
     获取可用的TTS语音列表
     """
+    # MiMo(mimo-v2.5-tts)的可选音色由平台侧维护，且和OpenAI的alloy/echo等完全不同。
+    # 这里不再硬编码一份很可能过时/错误的OpenAI音色表（否则APK端会拿到MiMo根本不认的音色ID），
+    # 只回显当前配置的默认音色；完整音色库请查阅MiMo文档。
     if tts_provider.name == "openai":
         voices = [
-            {"id": "alloy", "name": "Alloy", "description": "中性声音"},
-            {"id": "echo", "name": "Echo", "description": "男性声音"},
-            {"id": "fable", "name": "Fable", "description": "男性声音"},
-            {"id": "onyx", "name": "Onyx", "description": "男性声音"},
-            {"id": "nova", "name": "Nova", "description": "女性声音"},
-            {"id": "shimmer", "name": "Shimmer", "description": "女性声音"},
+            {
+                "id": settings.tts_provider_voice,
+                "name": settings.tts_provider_voice,
+                "description": "当前配置的默认音色（完整音色库见MiMo文档）",
+            },
         ]
     else:
         voices = []
-    
+
     return {"voices": voices, "provider": tts_provider.name}
 
 def run():

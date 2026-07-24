@@ -13,7 +13,6 @@ TTS提供方抽象。
 from __future__ import annotations
 
 import base64
-import io
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -85,7 +84,7 @@ class OpenAITTSProvider(TTSProvider):
         # 使用connect_timeout + read_timeout分离，避免建立连接后长时间无响应
         timeout = httpx.Timeout(
             connect=10.0,           # 连接超时10秒
-            read=self._settings.tts_timeout,  # 读取超时（从配置读取，默认60秒）
+            read=self._settings.tts_timeout,  # 读取超时（从配置读取；代码默认15秒，.env里设为60秒）
             write=10.0,
             pool=10.0,
         )

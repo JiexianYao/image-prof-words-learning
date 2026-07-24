@@ -5,14 +5,14 @@ from app.config import Settings
 
 def test_settings_load():
     """测试配置加载"""
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
 
 
 def test_llm_config():
     """测试LLM配置"""
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.llm_provider_model == "mimo-v2.5-pro"
     assert settings.llm_api_key == "default"
     assert settings.llm_base_url == "https://api.xiaomimimo.com/v1"
@@ -21,7 +21,7 @@ def test_llm_config():
 
 def test_tts_config():
     """测试TTS配置"""
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.tts_provider_model == "mimo-v2.5-tts"
     assert settings.tts_provider_voice == "mimo_default"
     assert settings.tts_provider_base_url == "https://api.xiaomimimo.com/v1"

@@ -219,5 +219,6 @@ class COSClient:
             return None
 
 
-# 全局COS客户端实例
-cos_client = COSClient()
+# 注意：不在模块顶层实例化 COSClient()。那样只要 import 到本模块就会尝试连接 COS，
+# 而 image 服务当前并未把 qcloud_cos 放进 requirements，会在 import 期抛错/告警。
+# 需要用到时，由调用方显式 COSClient() 实例化即可。

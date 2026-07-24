@@ -136,7 +136,7 @@ def _build_prompt(word: str, chinese_def: str, pos: str, scene_type: str, count:
         # 如果文件不存在，使用默认提示词
         template = (
             "你是一个严格遵守输出格式的英语例句生成器。\n"
-            "目标单词：{word}（词性：{pos or '未指定'}）\n"
+            "目标单词：{word}（词性：{pos}）\n"
             "目标释义（只围绕这一个释义造句，不要涉及这个单词的其他含义）：{chinese_def}\n"
             "场景标签：{scene_type}\n"
             "请生成恰好 {count} 个英文例句，每句都必须包含单词「{word}」本身或其常见词形变化，"
@@ -165,9 +165,14 @@ class OpenAIProvider(SentenceAIProvider):
 
     async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int) -> List[str]:
         prompt = _build_prompt(word, chinese_def, pos, scene_type, count)
+        # 拼接端点路径：base_url 只是 .../v1，真正的对话补全接口是 /v1/chat/completions。
+        # 直接 POST 到裸 base_url 会 404（和 tts_provider 里的处理保持一致）。
+        chat_url = self._settings.llm_base_url.rstrip("/")
+        if not chat_url.endswith("/chat/completions"):
+            chat_url = f"{chat_url}/chat/completions"
         async with httpx.AsyncClient(timeout=self._settings.llm_timeout) as client:
             resp = await client.post(
-                self._settings.llm_base_url,
+                chat_url,
                 headers={
                     "Authorization": f"Bearer {self._settings.llm_api_key}",
                     "content-type": "application/json",

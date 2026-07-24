@@ -1,7 +1,0 @@
-{
-  "model": "tts-1",
-  "input": "{text}",
-  "voice": "{voice}",
-  "speed": {speed},
-  "response_format": "mp3"
-}
