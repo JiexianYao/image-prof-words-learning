@@ -50,6 +50,7 @@ class SentenceRequest(BaseModel):
     chinese_def: str
     scene_type: str = "Academic"  # Academic, Mythology, Daily
     count: int = 3
+    custom_prompt: Optional[str] = None  # 自定义提示词模板，为空时使用默认模板
 
 class SentenceResponse(BaseModel):
     """例句生成响应模型"""
@@ -87,7 +88,8 @@ async def generate_sentences(request: SentenceRequest):
                 chinese_def=request.chinese_def,
                 pos="",
                 scene_type=request.scene_type,
-                count=request.count
+                count=request.count,
+                custom_prompt=request.custom_prompt
             )
             logger.info(f"成功生成 {len(sentences)} 个例句 (来源: {llm_provider.name})")
         except Exception as e:

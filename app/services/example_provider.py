@@ -21,7 +21,7 @@ import random
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import httpx
 from loguru import logger
@@ -35,7 +35,7 @@ class SentenceAIProvider(ABC):
     name: str = "base"
 
     @abstractmethod
-    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int) -> List[str]:
+    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int, custom_prompt: Optional[str] = None) -> List[str]:
         ...
 
 
@@ -83,7 +83,7 @@ class TemplateProvider(SentenceAIProvider):
         ],
     }
 
-    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int) -> List[str]:
+    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int, custom_prompt: Optional[str] = None) -> List[str]:
         templates = self.SCENE_TEMPLATES.get(scene_type, self.SCENE_TEMPLATES["Academic"])
         # 用可重复抽样的 random.choices 代替 random.sample：
         # 此前 random.sample(templates, min(count, len(templates))) 在 count 超过模板池大小时
@@ -126,33 +126,42 @@ def _sanity_check(sentences: List[str], word: str, count: int) -> Tuple[bool, st
     return True, "ok"
 
 
-def _build_prompt(word: str, chinese_def: str, pos: str, scene_type: str, count: int) -> str:
-    # 从TXT文件加载提示词模板
-    prompt_file = Path(__file__).parent.parent / "templates" / "sentence_generation_prompt.txt"
-    try:
-        with open(prompt_file, "r", encoding="utf-8") as f:
-            template = f.read()
-    except FileNotFoundError:
-        # 如果文件不存在，使用默认提示词
-        template = (
-            "你是一个严格遵守输出格式的英语例句生成器。\n"
-            "目标单词：{word}（词性：{pos}）\n"
-            "目标释义（只围绕这一个释义造句，不要涉及这个单词的其他含义）：{chinese_def}\n"
-            "场景标签：{scene_type}\n"
-            "请生成恰好 {count} 个英文例句，每句都必须包含单词「{word}」本身或其常见词形变化，"
-            "且语境要匹配上面给出的释义和场景标签。\n"
-            "只输出一个JSON数组，数组元素是字符串，不要输出任何解释文字、前后缀或Markdown代码块标记。\n"
-            '输出格式例如：["First sentence.", "Second sentence."]'
-        )
+def _build_prompt(word: str, chinese_def: str, pos: str, scene_type: str, count: int, custom_prompt: Optional[str] = None) -> str:
+    # 优先使用客户端传入的自定义提示词模板
+    if custom_prompt and custom_prompt.strip():
+        template = custom_prompt.strip()
+    else:
+        # 从TXT文件加载提示词模板
+        prompt_file = Path(__file__).parent.parent / "templates" / "sentence_generation_prompt.txt"
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                template = f.read()
+        except FileNotFoundError:
+            # 如果文件不存在，使用默认提示词
+            template = (
+                "你是一个严格遵守输出格式的英语例句生成器。\n"
+                "目标单词：{word}（词性：{pos}）\n"
+                "目标释义（只围绕这一个释义造句，不要涉及这个单词的其他含义）：{chinese_def}\n"
+                "场景标签：{scene_type}\n"
+                "请生成恰好 {count} 个英文例句，每句都必须包含单词「{word}」本身或其常见词形变化，"
+                "且语境要匹配上面给出的释义和场景标签。\n"
+                "只输出一个JSON数组，数组元素是字符串，不要输出任何解释文字、前后缀或Markdown代码块标记。\n"
+                '输出格式例如：["First sentence.", "Second sentence."]'
+            )
     
-    # 使用模板生成提示词
-    return template.format(
-        word=word,
-        chinese_def=chinese_def,
-        pos=pos or '未指定',
-        scene_type=scene_type,
-        count=count
-    )
+    # 使用模板生成提示词（自定义模板可能包含也可能不包含这些占位符）
+    try:
+        return template.format(
+            word=word,
+            chinese_def=chinese_def,
+            pos=pos or '未指定',
+            scene_type=scene_type,
+            count=count
+        )
+    except KeyError:
+        # 自定义模板可能使用了不同的占位符或没有占位符，直接返回模板内容
+        logger.warning(f"自定义提示词模板缺少部分占位符，直接返回原始模板")
+        return template
 
 
 class OpenAIProvider(SentenceAIProvider):
@@ -163,8 +172,8 @@ class OpenAIProvider(SentenceAIProvider):
     def __init__(self, settings: Settings):
         self._settings = settings
 
-    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int) -> List[str]:
-        prompt = _build_prompt(word, chinese_def, pos, scene_type, count)
+    async def generate(self, word: str, chinese_def: str, pos: str, scene_type: str, count: int, custom_prompt: Optional[str] = None) -> List[str]:
+        prompt = _build_prompt(word, chinese_def, pos, scene_type, count, custom_prompt)
         # 拼接端点路径：base_url 只是 .../v1，真正的对话补全接口是 /v1/chat/completions。
         # 直接 POST 到裸 base_url 会 404（和 tts_provider 里的处理保持一致）。
         chat_url = self._settings.llm_base_url.rstrip("/")
