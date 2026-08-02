@@ -5,11 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Optional
+import httpx
 import uvicorn
 from loguru import logger
 
 from .config import get_settings
-from .services.example_provider import build_provider, SentenceAIProvider
 from .services.tts_provider import build_tts_provider
 
 # 获取配置
@@ -24,8 +24,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AudioLex AI后端服务",
-    description="本地AI例句生成服务，为Android APK提供例句生成和TTS能力",
-    version="1.0.0",
+    description="本地AI对话服务，为Android APK提供单词学习对话和TTS能力",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -38,29 +38,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始化例句生成provider
-llm_provider: SentenceAIProvider = build_provider(settings)
-
 # 初始化TTS提供方
 tts_provider = build_tts_provider(settings)
 
-class SentenceRequest(BaseModel):
-    """例句生成请求模型"""
+
+class ChatMessage(BaseModel):
+    """对话消息"""
+    role: str  # "user" 或 "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """单词对话请求模型"""
     word: str
     chinese_def: str
-    scene_type: str = "Academic"  # Academic, Mythology, Daily
-    count: int = 3
-    custom_prompt: Optional[str] = None  # 自定义提示词模板，为空时使用默认模板
+    pos: str = ""  # 词性，如 "n." "v." "adj."
+    messages: List[ChatMessage]  # 对话历史
 
-class SentenceResponse(BaseModel):
-    """例句生成响应模型"""
-    sentences: List[str]
+
+class ChatResponse(BaseModel):
+    """单词对话响应模型"""
+    reply: str
+
 
 class TTSRequest(BaseModel):
     """TTS请求模型"""
     text: str
     voice: Optional[str] = None  # alloy, echo, fable, onyx, nova, shimmer
     speed: float = 1.0  # 0.25-4.0
+
 
 @app.get("/health")
 async def health_check():
@@ -71,46 +77,71 @@ async def health_check():
         "tts_provider": tts_provider.name
     }
 
-@app.post("/generate-sentences", response_model=SentenceResponse)
-async def generate_sentences(request: SentenceRequest):
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
     """
-    生成例句接口
+    单词学习对话接口
     
-    根据单词、中文释义、场景类型生成指定数量的英文例句
+    用户可以围绕一个单词持续提问，支持多轮对话。
     """
     try:
-        logger.info(f"收到例句生成请求: {request.word} - {request.chinese_def}")
+        logger.info(f"收到对话请求: {request.word} - {request.chinese_def}, 消息数: {len(request.messages)}")
         
-        # 尝试使用LLM生成
-        try:
-            sentences = await llm_provider.generate(
-                word=request.word,
-                chinese_def=request.chinese_def,
-                pos="",
-                scene_type=request.scene_type,
-                count=request.count,
-                custom_prompt=request.custom_prompt
+        # 构建系统提示词
+        system_prompt = (
+            f"你是一个专业的英语学习助手，擅长为单词造句和解释用法。\n\n"
+            f"当前正在学习的单词信息：\n"
+            f"- 单词：{request.word}\n"
+            f"- 词性：{request.pos or '未指定'}\n"
+            f"- 中文释义：{request.chinese_def}\n\n"
+            f"请围绕这个单词回答学生的问题。要求：\n"
+            f"1. 用自然、地道的英语回答，示例句子要符合真实语境。\n"
+            f"2. 如果学生请求造句，请构造具体、场景化的句子，不要使用模板化的泛泛表达。\n"
+            f"3. 可以使用相关领域的词汇和搭配来丰富语境。\n"
+            f"4. 除非学生明确要求中文解释，否则请用英语回答。\n"
+            f"5. 句子要展示该单词的常见搭配和真实用法。\n"
+        )
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in request.messages:
+            messages.append({"role": msg.role, "content": msg.content})
+        
+        # 调用LLM
+        chat_url = settings.llm_base_url.rstrip("/")
+        if not chat_url.endswith("/chat/completions"):
+            chat_url = f"{chat_url}/chat/completions"
+        
+        async with httpx.AsyncClient(timeout=settings.llm_timeout) as client:
+            resp = await client.post(
+                chat_url,
+                headers={
+                    "Authorization": f"Bearer {settings.llm_api_key}",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": settings.llm_provider_model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                },
             )
-            logger.info(f"成功生成 {len(sentences)} 个例句 (来源: {llm_provider.name})")
-        except Exception as e:
-            logger.error(f"AI生成失败: {str(e)}，降级使用模板兜底")
-            # 降级到模板兜底
-            from .services.example_provider import TemplateProvider
-            fallback = TemplateProvider()
-            sentences = await fallback.generate(
-                word=request.word,
-                chinese_def=request.chinese_def,
-                pos="",
-                scene_type=request.scene_type,
-                count=request.count
-            )
-            logger.info(f"模板兜底生成 {len(sentences)} 个例句")
+            resp.raise_for_status()
+            payload = resp.json()
+            reply = payload["choices"][0]["message"]["content"]
         
-        return SentenceResponse(sentences=sentences)
+        logger.info(f"对话回复成功: {request.word}, 回复长度: {len(reply)}")
+        return ChatResponse(reply=reply)
         
+    except httpx.TimeoutException:
+        logger.error(f"LLM请求超时: {request.word}")
+        raise HTTPException(status_code=504, detail="LLM请求超时，请稍后重试")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"LLM请求HTTP错误: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"LLM服务返回错误: {e.response.status_code}")
     except Exception as e:
-        logger.error(f"例句生成失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"例句生成失败: {str(e)}")
+        logger.error(f"对话生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"对话生成失败: {str(e)}")
+
 
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
@@ -129,8 +160,6 @@ async def text_to_speech(request: TTSRequest):
         )
         
         logger.info(f"成功生成TTS音频，大小: {len(audio_data)} 字节")
-        # 根据 TTS 提供方设置正确的媒体类型和文件扩展名
-        # MiMo(/v1/chat/completions)按我们的请求返回的是wav，不是mp3
         media_type = "audio/wav"
         file_ext = "wav"
         
@@ -149,14 +178,12 @@ async def text_to_speech(request: TTSRequest):
         logger.error(f"TTS生成失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"TTS生成失败: {str(e)}")
 
+
 @app.get("/tts/voices")
 async def list_tts_voices():
     """
     获取可用的TTS语音列表
     """
-    # MiMo(mimo-v2.5-tts)的可选音色由平台侧维护，且和OpenAI的alloy/echo等完全不同。
-    # 这里不再硬编码一份很可能过时/错误的OpenAI音色表（否则APK端会拿到MiMo根本不认的音色ID），
-    # 只回显当前配置的默认音色；完整音色库请查阅MiMo文档。
     if tts_provider.name == "openai":
         voices = [
             {
